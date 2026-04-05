@@ -1,0 +1,28 @@
+{
+  "name": "HimalRemit",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "containerEnv": {
+    "HOST": "0.0.0.0",
+    "WDS_SOCKET_PORT": "0"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {
+      "moby": true
+    }
+  },
+  "forwardPorts": [3000, 5001, 1433, 6379, 9092],
+  "portsAttributes": {
+    "3000": { "label": "React", "onAutoForward": "notify" },
+    "5001": { "label": "HimalRemit API", "onAutoForward": "notify" },
+    "1433": { "label": "SQL Server" },
+    "6379": { "label": "Redis" },
+    "9092": { "label": "Kafka" }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "postStartCommand": "docker compose -f docker-compose.yml up -d",
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
+    }
+  }
+}

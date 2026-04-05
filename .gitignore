@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment files
+.env
+!.env.example
+
+# Build
+build/
+dist/
+
+# Logs
+logs/
+*.log
+
+# OS / archives (macOS zip artifacts)
+**/.DS_Store
+.DS_Store
+__MACOSX/
+Thumbs.db
