@@ -9,7 +9,6 @@ const logger = require('../utils/logger');
 const OTP_EXPIRES_MINUTES = parseInt(process.env.OTP_EXPIRES_MINUTES) || 5;
 const OTP_LENGTH = parseInt(process.env.OTP_LENGTH) || 6;
 
-/** Local-only: skip SMTP; use DB/Redis as normal. Requires NODE_ENV=development. Never enable in production. */
 const isLocalDevDummyAuth = () =>
   process.env.NODE_ENV === 'development' &&
   process.env.LOCAL_DEV_DUMMY_AUTH === 'true';
@@ -26,16 +25,12 @@ const isSqlUniqueViolation = (err) => {
   return msg.includes('UNIQUE') && (msg.includes('USERS') || msg.includes('EMAIL'));
 };
 
-/** Display name from email local-part for auto-provisioned users */
 const fullNameFromEmail = (normalizedEmail) => {
   const local = (normalizedEmail.split('@')[0] || 'user').replace(/[._-]+/g, ' ').trim();
   if (!local) return 'User';
   return local.replace(/\b\w/g, (c) => c.toUpperCase()).slice(0, 100);
 };
 
-/**
- * Load user or create one when AUTO_PROVISION_USERS=true (any email can sign in).
- */
 const ensureUserForOtp = async (pool, rawEmail) => {
   const normalized = rawEmail.toLowerCase().trim();
 
@@ -87,37 +82,38 @@ const sendOTP = async (req, res) => {
       return errorResponse(res, 'Your account has been deactivated. Contact administrator.', 403);
     }
 
+    const normalizedEmail = email.toLowerCase().trim();
+
     // Invalidate previous unused OTPs
     await pool.request()
-      .input('email', sql.NVarChar, email.toLowerCase().trim())
+      .input('email', sql.NVarChar, normalizedEmail)
       .query('UPDATE otps SET is_used = 1 WHERE email = @email AND is_used = 0');
 
     const dummyLocal = isLocalDevDummyAuth();
     const fixed = pickDevFixedOtp();
-    const otp =
-      dummyLocal && fixed ? fixed : generateOTP(OTP_LENGTH);
+    const otp = dummyLocal && fixed ? fixed : generateOTP(OTP_LENGTH);
     const expiresAt = new Date(Date.now() + OTP_EXPIRES_MINUTES * 60 * 1000);
 
     // Store OTP in DB
     await pool.request()
-      .input('email', sql.NVarChar, email.toLowerCase().trim())
+      .input('email', sql.NVarChar, normalizedEmail)
       .input('otp_code', sql.NVarChar, otp)
       .input('expires_at', sql.DateTime2, expiresAt)
       .query('INSERT INTO otps (email, otp_code, expires_at) VALUES (@email, @otp_code, @expires_at)');
 
-    // Also store in Redis as cache
+    // Store in Redis as cache
     const redis = getRedis();
-    await redis.setex(`otp:${email.toLowerCase()}`, OTP_EXPIRES_MINUTES * 60, otp);
+    await redis.setex(`otp:${normalizedEmail}`, OTP_EXPIRES_MINUTES * 60, otp);
 
     if (dummyLocal) {
-      logger.warn(`[LOCAL_DEV_DUMMY_AUTH] Email skipped. OTP for ${email}: ${otp}`);
+      logger.warn(`[LOCAL_DEV_DUMMY_AUTH] Email skipped. OTP for ${normalizedEmail}: ${otp}`);
     } else {
-      await sendOTPEmail(email, otp, OTP_EXPIRES_MINUTES);
+      await sendOTPEmail(normalizedEmail, otp, OTP_EXPIRES_MINUTES);
     }
 
-    logger.info(dummyLocal ? `OTP ready (local dummy) for ${email}` : `OTP sent to ${email}`);
-    const payload = { email, expiresMinutes: OTP_EXPIRES_MINUTES };
+    const payload = { email: normalizedEmail, expiresMinutes: OTP_EXPIRES_MINUTES };
     if (dummyLocal) payload.devOtp = otp;
+
     return successResponse(
       res,
       payload,
@@ -135,7 +131,7 @@ const sendOTP = async (req, res) => {
     ) {
       return errorResponse(
         res,
-        'Gmail rejected the password. Create an App Password: Google Account → Security → turn on 2-Step Verification → App passwords → generate one for Mail, then put only that 16-character password in EMAIL_PASS (not your normal Gmail password).',
+        'Gmail rejected the password. Create an App Password: Google Account → Security → 2-Step Verification → App passwords → generate one for Mail, then put the 16-character code in EMAIL_PASS.',
         502
       );
     }
@@ -154,13 +150,12 @@ const verifyOTP = async (req, res) => {
 
     // Check Redis cache first
     const cachedOTP = await redis.get(`otp:${normalizedEmail}`);
-
     let isValid = false;
 
     if (cachedOTP && cachedOTP === otp) {
       isValid = true;
     } else {
-      // Fallback to DB check
+      // Fallback to DB
       const otpResult = await pool.request()
         .input('email', sql.NVarChar, normalizedEmail)
         .input('otp', sql.NVarChar, otp)
@@ -198,7 +193,15 @@ const verifyOTP = async (req, res) => {
 
     const user = userResult.recordset[0];
 
-    // Generate JWT
+    // FIX: guard against user being deleted between send-otp and verify-otp
+    if (!user) {
+      return errorResponse(res, 'Account no longer exists. Please contact administrator.', 404);
+    }
+
+    if (!user.is_active) {
+      return errorResponse(res, 'Your account has been deactivated. Contact administrator.', 403);
+    }
+
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,

@@ -35,14 +35,12 @@ const getTransporter = () => {
 };
 
 const sendOTPEmail = async (email, otp, expiresMinutes = 5) => {
-  try {
-    if (process.env.OTP_LOG_ONLY === 'true') {
-      logger.warn(
-        `[OTP_LOG_ONLY] OTP for ${email}: ${otp} (expires in ${expiresMinutes} min) — use this code to log in`
-      );
-      return true;
-    }
+  if (process.env.OTP_LOG_ONLY === 'true') {
+    logger.warn(`[OTP_LOG_ONLY] OTP for ${email}: ${otp} (expires in ${expiresMinutes} min)`);
+    return true;
+  }
 
+  try {
     const transport = getTransporter();
     const fromRaw = (process.env.EMAIL_FROM || '').trim();
     const from =
@@ -67,10 +65,10 @@ const sendOTPEmail = async (email, otp, expiresMinutes = 5) => {
             <div style="background: #1a1a2e; color: #f59e0b; font-size: 42px; font-weight: bold; letter-spacing: 12px; padding: 20px; border-radius: 8px; margin: 16px 0;">
               ${otp}
             </div>
-            <p style="color: #9ca3af; font-size: 14px;">This code expires in <strong>${expiresMinutes} minutes</strong>.</p>
+            <p style="color: #9ca3af; font-size: 14px;">Expires in <strong>${expiresMinutes} minutes</strong>.</p>
             <p style="color: #ef4444; font-size: 13px; margin-top: 16px;">Do not share this code with anyone.</p>
           </div>
-          <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 16px;">If you did not request this, you can ignore this email.</p>
+          <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 16px;">If you did not request this, ignore this email.</p>
         </div>
       `,
     };
@@ -78,8 +76,15 @@ const sendOTPEmail = async (email, otp, expiresMinutes = 5) => {
     const info = await transport.sendMail(mailOptions);
     logger.info(`OTP email sent to ${email}: ${info.messageId}`);
     return true;
+
   } catch (error) {
     logger.error(`Failed to send OTP email to ${email}:`, error.message);
+
+    if (process.env.NODE_ENV === 'development') {
+      logger.warn(`[DEV FALLBACK] SMTP failed. OTP for ${email}: ${otp} — use this to log in`);
+      return true;
+    }
+
     throw error;
   }
 };
